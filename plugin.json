@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "devils-advocate",
+  "version": "0.1.0",
+  "description": "Persistent skeptical discussions with the opposite AI provider.",
+  "author": {"name": "Andreas Pardeike"},
+  "extensions": {"com.openai": {"interface": {
+    "displayName": "Devil's Advocate",
+    "shortDescription": "Ask the other model",
+    "developerName": "Andreas Pardeike",
+    "category": "Developer tools"
+  }}}
+}

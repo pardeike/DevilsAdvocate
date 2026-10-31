@@ -134,6 +134,20 @@ class SessionsTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'No provider'):
             self.prepare()
 
+    def test_worker_can_run_with_exhausted_account_and_live_credits(self):
+        self.write_usage(codex=0, claude=0)
+        payload = json.loads(self.usage_file.read_text())
+        codex = payload['data']['providers'][0]
+        codex['windows'][0]['name'] = 'primary'
+        codex['credits'] = {'status': 'ok', 'canContinue': True, 'balance': '100'}
+        self.usage_file.write_text(json.dumps(payload))
+        session, _ = self.prepare(caller='claude')
+        reply = session.call('reply', wait_seconds=5)
+        self.assertEqual(reply['phase'], 'ready')
+        self.assertEqual(reply['provider'], 'codex')
+        self.assertTrue(reply['allowance_selection']['credits_available'])
+        self.assertIn('primed', reply['reply'])
+
     def test_pending_turn_is_not_resubmitted_and_shutdown_cancels_it(self):
         s, r = self.prepare(topic='SLOW discussion')
         pending = s.call('reply', wait_seconds=0)
@@ -274,6 +288,41 @@ class AllowanceTest(unittest.TestCase):
                 self.assertEqual(providers.allowance('/usage'), data)
                 self.assertEqual(providers.allowance('/usage'), data)
                 self.assertEqual(fetch.call_count, 1)
+
+    def test_codex_credits_cover_account_exhaustion_and_forecast(self):
+        entry = self.entry('codex', 0)
+        entry['credits'] = {'status': 'ok', 'canContinue': True, 'balance': '62499.1'}
+        data = {'providers': [entry, self.entry('claude', 0)]}
+        self.assertTrue(providers.available(data, 'codex', 10)[0])
+        result = providers.select({'caller': 'claude', 'provider': 'codex'}, data)
+        self.assertEqual(result['provider'], 'codex')
+        self.assertIn('credit', result['allowance_selection']['reason'])
+        entry['windows'][0]['remainingPercent'] = 40
+        entry['windows'][0]['forecast'] = dict(status='ok', accountMatch='verified',
+            latestSampleAt=datetime.now(timezone.utc).isoformat(),
+            optimistic={'usedPercentAtReset': 150}, pessimistic={'usedPercentAtReset': 200})
+        self.assertTrue(providers.available(data, 'codex', 10)[0])
+
+    def test_credits_do_not_cover_model_limits_stale_or_claude(self):
+        entry = self.entry('codex', 0)
+        entry['credits'] = {'status': 'ok', 'canContinue': True}
+        data = {'providers': [entry]}
+        entry['windows'].append({'name': 'model.primary', 'remainingPercent': 0})
+        self.assertFalse(providers.available(data, 'codex', 10)[0])
+        entry['windows'].pop()
+        entry['checkedAt'] = '2020-01-01T00:00:00Z'
+        self.assertFalse(providers.available(data, 'codex', 10)[0])
+        entry['checkedAt'] = datetime.now(timezone.utc).isoformat()
+        entry['provider'] = 'claude'
+        self.assertFalse(providers.available(data, 'claude', 10)[0])
+
+    def test_missing_unknown_or_unusable_credits_preserve_stop(self):
+        for credit in [None, {}, True, 'invalid', ['invalid'], {'status': 'unavailable', 'canContinue': True},
+                       {'status': 'ok', 'canContinue': False},
+                       {'status': 'ok', 'canContinue': 'true'}]:
+            entry = self.entry('codex', 0)
+            entry['credits'] = credit
+            self.assertFalse(providers.available({'providers': [entry]}, 'codex', 10)[0])
 
     def test_brrainztools_partial_exit_is_parsed(self):
         result = subprocess.CompletedProcess([], 1, json.dumps({'data': {'providers': [self.entry()]}}), '')

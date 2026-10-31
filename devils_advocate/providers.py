@@ -126,6 +126,12 @@ def allowance(executable: str) -> dict:
         return data
 
 
+def credit_capacity(entry: dict) -> bool:
+    credits = entry.get('credits')
+    return (entry.get('provider') == 'codex' and isinstance(credits, dict)
+            and credits.get('status') == 'ok' and credits.get('canContinue') is True)
+
+
 def available(data: dict, provider: str, reserve: float, use_forecast: bool = True) -> tuple[bool, str]:
     entry = next((p for p in data.get('providers', []) if p.get('provider') == provider), {})
     if entry.get('status') != 'ok' or not entry.get('windows'):
@@ -135,10 +141,13 @@ def available(data: dict, provider: str, reserve: float, use_forecast: bool = Tr
         age = (datetime.now(timezone.utc) - checked).total_seconds()
         if not 0 <= age <= 120:
             return False, 'allowance is stale'
+        credit_backed = credit_capacity(entry)
         for window in entry['windows']:
             remaining = window['remainingPercent']
             if type(remaining) not in (int, float) or not math.isfinite(remaining) or not 0 <= remaining <= 100:
                 return False, 'invalid allowance'
+            if credit_backed and window.get('name') in {'primary', 'secondary'}:
+                continue
             if remaining <= 1:
                 return False, f"{window['name']} has {remaining}% remaining"
             forecast = window.get('forecast', {})
@@ -161,7 +170,8 @@ def available(data: dict, provider: str, reserve: float, use_forecast: bool = Tr
                 return False, f"{window['name']} has {remaining}% remaining"
     except (KeyError, TypeError, ValueError):
         return False, 'invalid allowance'
-    return True, 'verified allowance above reserve'
+    return True, ('verified Codex credits available' if credit_backed
+                  else 'verified allowance above reserve')
 
 
 def pressure(data: dict, provider: str) -> tuple[float | None, float]:
@@ -191,12 +201,12 @@ def select(state: dict, data: dict) -> dict:
     eligible = [p for p in ('codex', 'claude')
                 if available(data, p, 1, use_forecast=False)[0]]
     if not eligible:
-        raise RuntimeError('No provider has verified allowance above the 1% hard stop')
+        raise RuntimeError('No provider has verified usable credits or allowance above the 1% hard stop')
     if healthy[current][0]:
         selected, reason = current, healthy[current][1]
     elif any(healthy[p][0] for p in eligible):
         selected = next(p for p in eligible if healthy[p][0])
-        reason = current + ': ' + healthy[current][1]
+        reason = current + ': ' + healthy[current][1] + '; ' + selected + ': ' + healthy[selected][1]
     else:
         pressures = {p: pressure(data, p) for p in eligible}
         if all(pressures[p][0] is not None for p in eligible):
@@ -209,4 +219,6 @@ def select(state: dict, data: dict) -> dict:
     return dict(provider=selected, model=defaults()[selected + '_model'],
                 allowance_selection=dict(preferred_provider=preferred, selected_provider=selected,
                     reserve_percent=reserve, reason=reason,
-                    fallback=selected != preferred))
+                    fallback=selected != preferred,
+                    credits_available=credit_capacity(next(
+                        (p for p in data['providers'] if p.get('provider') == selected), {}))))

@@ -118,8 +118,14 @@ The 10% reserve is configurable in defaults.json.
 If both providers are constrained, choose the lower average projected usage at
 reset. Use each provider's highest average across its forecast windows.
 If comparable forecasts are unavailable, choose more live allowance remaining.
-This can use a provider below the 10% reserve, but never at or below 1%.
-A provider with 1% or less remaining never starts another turn.
+This can use a provider below the 10% reserve, but never at or below 1% without verified usable Codex credits.
+A provider with 1% or less remaining stops unless BrrainzTools reports verified
+usable Codex credits. Codex `credits.status == "ok"` and `credits.canContinue == true`
+cover account-wide primary/secondary exhaustion and forecast pressure.
+They do not override model-specific limits, Claude limits, or stale usage data.
+Results expose `allowance_selection.credits_available`. This indicates available
+credit-backed capacity, not proof that a turn actually spent credits.
+The server never purchases credits or enables automatic reload.
 Unknown or stale live allowance cannot authorize a turn.
 Live checks must be at most two minutes old. All returned allowance windows are
 checked conservatively, including model windows.
